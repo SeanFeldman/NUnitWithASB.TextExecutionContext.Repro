@@ -1,7 +1,7 @@
 ﻿using System;
+using System.Text;
 using System.Threading.Tasks;
-using Microsoft.ServiceBus;
-using Microsoft.ServiceBus.Messaging;
+using Microsoft.Azure.ServiceBus;
 using NUnit.Framework;
 
 namespace NUnitWithASB
@@ -12,23 +12,22 @@ namespace NUnitWithASB
         [Test]
         public async Task Should_not_fail()
         {
+            // Ensure queue exists... because ASB management is a PITA now.
+
             var connectionString = Environment.GetEnvironmentVariable("AzureServiceBus.ConnectionString");
-            var namespaceManager = NamespaceManager.CreateFromConnectionString(connectionString);
             var queuePath = "repro";
-            if (! await namespaceManager.QueueExistsAsync(queuePath))
-            {
-                await namespaceManager.CreateQueueAsync(queuePath);
-            }
 
-            var queueClient = QueueClient.CreateFromConnectionString(connectionString, queuePath);
+            var connectionStringBuilder = new ServiceBusConnectionStringBuilder(connectionString);
+            connectionStringBuilder.EntityPath = queuePath;
+            var queueClient = new QueueClient(connectionStringBuilder);
 
-            await queueClient.SendAsync(new BrokeredMessage("message"));
+            await queueClient.SendAsync(new Message(Encoding.UTF8.GetBytes("message")));
 
             var taskCompletionSource = new TaskCompletionSource<bool>();
 
-            queueClient.OnMessageAsync(async message =>
+            queueClient.RegisterMessageHandler(async (message, token) =>
             {
-                var payload = message.GetBody<string>();
+                var payload = Encoding.UTF8.GetString(message.Body);
                 try
                 {
                     Assert.AreEqual(payload, "message");
@@ -39,10 +38,10 @@ namespace NUnitWithASB
                     taskCompletionSource.SetResult(false);
                 }
 
-                await message.CompleteAsync();
+                await queueClient.CompleteAsync(message.SystemProperties.LockToken);
 
                 taskCompletionSource.SetResult(true);
-            }, new OnMessageOptions
+            }, new MessageHandlerOptions
             {
                 AutoComplete = false,
                 MaxConcurrentCalls = 1
